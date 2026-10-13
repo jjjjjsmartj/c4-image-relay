@@ -1,0 +1,67 @@
+name: Export CUDA image as offline bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Free disk space on temporary runner
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          docker system prune -af
+          df -h
+
+      - name: Pull NVIDIA CUDA image
+        shell: bash
+        run: |
+          docker pull --platform linux/amd64 \
+            nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+      - name: Export and split Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04"
+          PREFIX="nvidia-cuda-11.8.0-cudnn8-devel-ubuntu22.04.tar.gz.part-"
+
+          docker save "$IMAGE" |
+            gzip -1 |
+            split -b 1900M -d -a 2 - "$PREFIX"
+
+          sha256sum ${PREFIX}* > SHA256SUMS.txt
+
+          {
+            echo "Docker image: $IMAGE"
+            echo
+            echo "Linux import command:"
+            echo "cat ${PREFIX}* | gzip -dc | docker load"
+          } > IMPORT.txt
+
+          ls -lh ${PREFIX}* SHA256SUMS.txt IMPORT.txt
+          df -h
+
+      - name: Publish files as GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create cuda-11.8-offline \
+            nvidia-cuda-11.8.0-cudnn8-devel-ubuntu22.04.tar.gz.part-* \
+            SHA256SUMS.txt \
+            IMPORT.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "CUDA 11.8 cuDNN 8 Ubuntu 22.04 offline image" \
+            --notes "Offline Docker image for the C4 reconstruction environment."
